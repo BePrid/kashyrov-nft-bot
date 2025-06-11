@@ -69,13 +69,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     print("🚀 Бот запускается...")
     await init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
 
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    await app.run_polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
