@@ -14,6 +14,7 @@ logging.basicConfig(
 
 TOKEN = os.getenv("TOKEN")
 
+
 def get_main_menu():
     keyboard = [
         [InlineKeyboardButton("💳 Баланс", callback_data="balance")],
@@ -24,6 +25,7 @@ def get_main_menu():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+
 def get_settings_menu():
     keyboard = [
         [InlineKeyboardButton("🔽 Мин. цена", callback_data="set_min_price")],
@@ -31,6 +33,7 @@ def get_settings_menu():
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
 
 async def init_db():
     async with aiosqlite.connect("users.db") as db:
@@ -48,6 +51,7 @@ async def init_db():
         """)
         await db.commit()
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     async with aiosqlite.connect("users.db") as db:
@@ -58,24 +62,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.commit()
     await update.message.reply_text("Добро пожаловать!", reply_markup=get_main_menu())
 
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Используйте кнопки ниже.")
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(f"Вы нажали: {query.data}")
 
+
 async def main():
     print("🚀 Бот запускается...")
     await init_db()
-
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    await app.run_polling()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
