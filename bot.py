@@ -66,7 +66,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(f"Вы нажали: {query.data}")
+
+    if query.data == "balance":
+        await query.edit_message_text("💰 Ваш текущий баланс: 0 звёзд")
+    elif query.data == "settings":
+        await query.edit_message_text("⚙️ Настройки:", reply_markup=get_settings_menu())
+    elif query.data == "deposit":
+        await query.edit_message_text("💳 Для пополнения перейдите по ссылке: https://example.com/pay")
+    elif query.data == "toggle_autobuy":
+        await query.edit_message_text("🔄 Автопокупка переключена.")
+    elif query.data == "profile":
+        await query.edit_message_text("👤 Ваш профиль:\nИмя: Иван\nБаланс: 0 звёзд\nАвтопокупка: Вкл")
+    elif query.data == "back_to_main":
+        await query.edit_message_text("🏠 Главное меню:", reply_markup=get_main_menu())
+    elif query.data == "set_min_price":
+        await query.edit_message_text("Введите минимальную цену:")
+    elif query.data == "set_max_price":
+        await query.edit_message_text("Введите максимальную цену:")
+    else:
+        await query.edit_message_text(f"Неизвестная команда: {query.data}")
 
 import nest_asyncio
 nest_asyncio.apply()
