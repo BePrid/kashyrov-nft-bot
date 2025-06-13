@@ -1,22 +1,17 @@
 import os
+import asyncio
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+import aiosqlite
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+    MessageHandler, ContextTypes, ConversationHandler, filters
 )
-import aiosqlite
-import nest_asyncio
 
-nest_asyncio.apply()
-
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-
-user_states = {}
+DEPOSIT_AMOUNT = 1
 
 def get_main_menu():
     keyboard = [
@@ -28,31 +23,30 @@ def get_main_menu():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_settings_menu():
-    keyboard = [
-        [InlineKeyboardButton("🔽 Мин. цена", callback_data="set_min_price")],
-        [InlineKeyboardButton("🔼 Макс. цена", callback_data="set_max_price")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def get_back_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]])
-
 async def init_db():
     async with aiosqlite.connect("users.db") as db:
-        await db.execute(
-            """
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 first_name TEXT,
-                balance REAL DEFAULT 0,
+                balance INTEGER DEFAULT 0,
                 min_price INTEGER DEFAULT 5,
                 max_price INTEGER DEFAULT 50,
+                max_per_drop INTEGER DEFAULT 3,
+                min_drop_size INTEGER DEFAULT 20,
                 auto_buy INTEGER DEFAULT 1
             )
-            """
-        )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount INTEGER,
+                commission INTEGER,
+                net_amount INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,76 +60,75 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Добро пожаловать!", reply_markup=get_main_menu())
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    state = user_states.get(user_id)
-
-    if state == "awaiting_deposit":
-        try:
-            stars = float(update.message.text)
-            deposit = stars * 0.97
-            async with aiosqlite.connect("users.db") as db:
-                await db.execute(
-                    "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-                    (deposit, user_id)
-                )
-                await db.commit()
-            await update.message.reply_text(f"🎉 Баланс успешно пополнен на {deposit:.2f} звёзд!", reply_markup=get_main_menu())
-        except ValueError:
-            await update.message.reply_text("Введите корректное число звёзд.", reply_markup=get_back_button())
-        finally:
-            user_states.pop(user_id, None)
-    else:
-        await update.message.reply_text("Пожалуйста, используйте кнопки ниже.", reply_markup=get_main_menu())
+    await update.message.reply_text("Используйте кнопки ниже.")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = query.from_user
-    user_id = user.id
     await query.answer()
-
-    if query.data == "balance":
+    data = query.data
+    if data == "balance":
         async with aiosqlite.connect("users.db") as db:
-            async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            async with db.execute("SELECT balance FROM users WHERE user_id = ?", (query.from_user.id,)) as cursor:
                 row = await cursor.fetchone()
                 balance = row[0] if row else 0
-        await query.edit_message_text(f"💳 Ваш баланс: {balance:.2f} звёзд", reply_markup=get_back_button())
+        await query.edit_message_text(f"💳 Ваш баланс: {balance} звёзд", reply_markup=get_main_menu())
 
-    elif query.data == "settings":
-        await query.edit_message_text("⚙️ Настройки", reply_markup=get_settings_menu())
+async def deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "💫 Введите количество звёзд, которое вы хотите пополнить.
 
-    elif query.data == "deposit":
-        user_states[user_id] = "awaiting_deposit"
-        await query.edit_message_text("⚠️ Комиссия на пополнение — 3%\n\nВведите количество звёзд, которое вы хотите зачислить:", reply_markup=get_back_button())
+⚠️ Комиссия: 3%"
+    )
+    return DEPOSIT_AMOUNT
 
-    elif query.data == "toggle_autobuy":
+async def handle_deposit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        amount = int(update.message.text)
+        if amount <= 0:
+            raise ValueError
+
+        commission = round(amount * 0.03)
+        net = amount - commission
+
         async with aiosqlite.connect("users.db") as db:
-            async with db.execute("SELECT auto_buy FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
-                current = row[0] if row else 1
-            new_state = 0 if current else 1
-            await db.execute("UPDATE users SET auto_buy = ? WHERE user_id = ?", (new_state, user_id))
+            await db.execute(
+                "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                (net, user_id)
+            )
+            await db.execute(
+                "INSERT INTO payments (user_id, amount, commission, net_amount) VALUES (?, ?, ?, ?)",
+                (user_id, amount, commission, net)
+            )
             await db.commit()
-        await query.edit_message_text("Главное меню:", reply_markup=get_main_menu())
 
-    elif query.data == "profile":
-        async with aiosqlite.connect("users.db") as db:
-            async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                row = await cursor.fetchone()
-                balance = row[0] if row else 0
-        await query.edit_message_text(f"👤 Ваш профиль\nID: {user_id}\nБаланс: {balance:.2f} звёзд", reply_markup=get_back_button())
-
-    elif query.data == "back_to_main":
-        await query.edit_message_text("Главное меню:", reply_markup=get_main_menu())
+        await update.message.reply_text(
+            f"🎉 Баланс успешно пополнен на {net} звёзд!\n(Учтена комиссия {commission} звёзд)"
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Введите корректное число.")
+    return ConversationHandler.END
 
 async def main():
+    import nest_asyncio
+    nest_asyncio.apply()
+
     print("🚀 Бот запускается...")
     await init_db()
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button_handler, pattern="^(balance|settings|toggle_autobuy|profile)$"))
+    app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(deposit_callback, pattern="^deposit$")],
+        states={DEPOSIT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_deposit_amount)]},
+        fallbacks=[],
+    ))
+
     await app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
